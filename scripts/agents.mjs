@@ -67,9 +67,10 @@ function mutateEntry(agent, j, mcp, remove) {
     j.mcpServers ||= {}; if (remove) delete j.mcpServers.videohub; else j.mcpServers.videohub = { type: 'stdio', command: 'node', args: [mcp], env: {} };
   } else {
     if (!object(j.mcp) && j.mcp != null) throw new Error('mcp is not an object'); j.mcp ||= {};
-    if (!object(j.mcp.servers) && j.mcp.servers != null) throw new Error('mcp.servers is not an object'); j.mcp.servers ||= {};
-    delete j.mcp.videohub;
-    if (remove) delete j.mcp.servers.videohub; else j.mcp.servers.videohub = { type: 'local', command: ['node', mcp], disabled: false };
+    if (!object(j.mcp.servers) && j.mcp.servers != null) throw new Error('mcp.servers is not an object');
+    // OpenCode's schema keys servers directly under mcp; an mcp.servers object makes it reject the whole config.
+    if (j.mcp.servers) { delete j.mcp.servers.videohub; if (!Object.keys(j.mcp.servers).length) delete j.mcp.servers; }
+    if (remove) delete j.mcp.videohub; else j.mcp.videohub = { type: 'local', command: ['node', mcp], enabled: true };
   }
 }
 const begin = '<!-- videohub:begin (added by VideoHub setup; remove with uninstall.ps1) -->', end = '<!-- videohub:end -->';
@@ -93,6 +94,8 @@ export async function integrateAgents({ action = 'setup', agents = [], hub = ROO
           if (cli) {
             let useCli = true;
             if (remove && agent === 'opencode') { const help = run(cli, ['mcp', '--help'], { env }); useCli = /\bremove\b/.test(String(help.stdout) + String(help.stderr)); }
+            // OpenCode 1.x `mcp add` is an interactive wizard with no arguments; write the config file instead.
+            if (!remove && agent === 'opencode') { const help = run(cli, ['mcp', 'add', '--help'], { env }); useCli = /--global\b/.test([help.stdout, help.stderr].join('\n')); }
             if (useCli) {
               const removeArgs = agent === 'claude' ? ['mcp', 'remove', 'videohub', '--scope', 'user'] : ['mcp', 'remove', 'videohub', '--global'];
               if (remove || mine) { const r = run(cli, removeArgs, { env }); if (r.status !== 0) throw new Error(`${label} MCP removal failed: ${r.stderr || r.error?.message || r.status}`); }
@@ -101,7 +104,7 @@ export async function integrateAgents({ action = 'setup', agents = [], hub = ROO
                 const r = run(cli, args, { env }); if (r.status !== 0) throw new Error(`${label} MCP registration failed; run ${agent} mcp add manually (${r.stderr || r.error?.message || r.status})`);
                 const list = run(cli, ['mcp', 'list'], { env }); if (list.status !== 0 || !/videohub/i.test(String(list.stdout) + String(list.stderr))) throw new Error(`${label} did not verify videohub in mcp list`);
               }
-            } else { mutateEntry(agent, j, mcp, true); save(p.config, j); }
+            } else { mutateEntry(agent, j, mcp, remove); save(p.config, j); }
           } else { mutateEntry(agent, j, mcp, remove); save(p.config, j); }
         }
       }

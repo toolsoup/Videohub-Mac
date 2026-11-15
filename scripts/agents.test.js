@@ -25,7 +25,7 @@ test('OpenCode fallback installs rules and skill into fake home, preserves unrel
   write(p.rule, '# Personal rules\nKeep this rule.\n');
   const r = await integrateAgents({ ...o, agents: ['opencode'] }); assert.deepEqual(r.errors, []); assert.equal(r.agentName, 'OpenCode');
   const f = path.join(p.dir, 'opencode.jsonc'), j = JSON.parse(fs.readFileSync(f, 'utf8'));
-  assert.equal(j.theme, 'mine'); assert.deepEqual(j.mcp.servers.other.command, ['other']); assert.deepEqual(j.mcp.servers.videohub.command, ['node', path.join(hub, 'server', 'mcp.js')]); assert.equal(j.mcp.servers.videohub.disabled, false);
+  assert.equal(j.theme, 'mine'); assert.deepEqual(j.mcp.servers.other.command, ['other']); assert.deepEqual(j.mcp.videohub.command, ['node', path.join(hub, 'server', 'mcp.js')]); assert.equal(j.mcp.videohub.type, 'local'); assert.equal(j.mcp.videohub.enabled, true);
   assert.match(fs.readFileSync(p.rule, 'utf8'), /Personal rules/); assert.match(fs.readFileSync(path.join(p.skill, 'SKILL.md'), 'utf8'), /description:/);
   await integrateAgents({ ...o, agents: ['opencode'] }); assert.equal([...fs.readFileSync(p.rule, 'utf8').matchAll(/<!-- videohub:begin/g)].length, 1);
   assert.equal(fs.existsSync(path.join(o.home, '.claude')), false);
@@ -34,11 +34,18 @@ test('dry run prints OpenCode steps without writing to fake home', async () => {
   const o = scratch(), r = await integrateAgents({ ...o, agents: ['opencode'], dryRun: true }); assert.deepEqual(r.errors, []); assert.ok(r.actions.some(x => /register OpenCode/.test(x))); assert.equal(fs.existsSync(agentPaths('opencode', o).dir), false);
 });
 test('MCP registration uses OpenCode CLI and verifies list; existing owned entry can be replaced', async () => {
-  const o = scratch(), calls = [], run = (f, a) => { calls.push(a); return { status: 0, stdout: a.includes('list') ? 'videohub connected' : '' }; };
+  const o = scratch(), calls = [], run = (f, a) => { calls.push(a); return { status: 0, stdout: a.includes('list') ? 'videohub connected' : a.includes('--help') ? 'opencode mcp add <name> --global' : '' }; };
   let r = await integrateAgents({ ...o, agents: ['opencode'], find: () => 'opencode', run, globalRule: false }); assert.deepEqual(r.errors, []);
-  assert.deepEqual(calls[0], ['mcp', 'add', 'videohub', '--global', '--', 'node', path.join(hub, 'server', 'mcp.js')]); assert.deepEqual(calls[1], ['mcp', 'list']);
+  assert.deepEqual(calls[0], ['mcp', 'add', '--help']); assert.deepEqual(calls[1], ['mcp', 'add', 'videohub', '--global', '--', 'node', path.join(hub, 'server', 'mcp.js')]); assert.deepEqual(calls[2], ['mcp', 'list']);
   const p = agentPaths('opencode', o); write(p.config, JSON.stringify({ mcp: { servers: { videohub: { command: ['node', path.join(hub, 'server', 'mcp.js')] } } } }));
-  calls.length = 0; r = await integrateAgents({ ...o, agents: ['opencode'], find: () => 'opencode', run, globalRule: false }); assert.deepEqual(r.errors, []); assert.deepEqual(calls[0], ['mcp', 'remove', 'videohub', '--global']);
+  calls.length = 0; r = await integrateAgents({ ...o, agents: ['opencode'], find: () => 'opencode', run, globalRule: false }); assert.deepEqual(r.errors, []); assert.deepEqual(calls[1], ['mcp', 'remove', 'videohub', '--global']);
+});
+test('OpenCode CLI with an interactive-only mcp add falls back to a flat mcp entry and drops an owned mcp.servers entry', async () => {
+  const o = scratch(), p = agentPaths('opencode', o), mcp = path.join(hub, 'server', 'mcp.js'), calls = [];
+  write(p.config, JSON.stringify({ mcp: { servers: { videohub: { command: ['node', mcp] } } } }));
+  const r = await integrateAgents({ ...o, agents: ['opencode'], find: () => 'opencode', run: (_f, a) => { calls.push(a); return { status: 0, stdout: 'opencode mcp add\n\nadd an MCP server' }; }, globalRule: false });
+  assert.deepEqual(r.errors, []); assert.deepEqual(calls, [['mcp', 'add', '--help']]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(p.config, 'utf8')).mcp, { videohub: { type: 'local', command: ['node', mcp], enabled: true } });
 });
 test('foreign integrations and malformed configs remain unchanged', async () => {
   const o = scratch(), p = agentPaths('opencode', o), text = JSON.stringify({ mcp: { servers: { videohub: { command: ['node', '/other-install/server/mcp.js'] } } } }); write(p.config, text); write(path.join(p.skill, 'SKILL.md'), 'Other install'); write(p.rule, '<!-- videohub:begin -->\n/other-install/server/cli.js\n<!-- videohub:end -->');
@@ -55,15 +62,15 @@ test('a foreign MCP entry does not get a mismatched new skill or rule', async ()
 test('uninstall removes only owned entries/rule and recycles skill; supports CLI without remove', async () => {
   const o = scratch(); await integrateAgents({ ...o, agents: ['opencode'] }); const p = agentPaths('opencode', o), recycled = [];
   const r = await integrateAgents({ ...o, action: 'uninstall', agents: ['opencode'], find: () => 'opencode', run: () => ({ status: 0, stdout: 'add list' }), recycle: async a => { recycled.push(...a); return a.map(p => ({ path: p, ok: true })); } });
-  assert.deepEqual(r.errors, []); assert.deepEqual(recycled, [p.skill]); assert.equal(JSON.parse(fs.readFileSync(p.config, 'utf8')).mcp.servers.videohub, undefined); assert.doesNotMatch(fs.readFileSync(p.rule, 'utf8'), /videohub:begin/);
+  assert.deepEqual(r.errors, []); assert.deepEqual(recycled, [p.skill]); assert.equal(JSON.parse(fs.readFileSync(p.config, 'utf8')).mcp.videohub, undefined); assert.doesNotMatch(fs.readFileSync(p.rule, 'utf8'), /videohub:begin/);
 });
 test('agent detection uses fake home and supplied PATH lookup', () => {
   const o = scratch(); fs.mkdirSync(agentPaths('opencode', o).dir, { recursive: true }); assert.deepEqual(detectAgents(o), ['opencode']); assert.deepEqual(detectAgents({ ...o, find: n => n === 'claude' ? 'claude' : null }), ['claude', 'opencode']);
 });
 test('all injected agent CLI calls receive the selected fake environment', async () => {
   const o = scratch(), calls = [];
-  const r = await integrateAgents({ ...o, agents: ['opencode'], find: () => 'opencode', run: (_f, args, options) => { calls.push(options.env); return { status: 0, stdout: args.includes('list') ? 'videohub' : '' }; } });
-  assert.deepEqual(r.errors, []); assert.equal(calls.length, 2); assert.ok(calls.every(env => env === o.env));
+  const r = await integrateAgents({ ...o, agents: ['opencode'], find: () => 'opencode', run: (_f, args, options) => { calls.push(options.env); return { status: 0, stdout: args.includes('list') ? 'videohub' : args.includes('--help') ? 'add <name> --global' : '' }; } });
+  assert.deepEqual(r.errors, []); assert.equal(calls.length, 3); assert.ok(calls.every(env => env === o.env));
 });
 test('uninstall preserves conflicting legacy and V2 MCP entries and removes only its own rule block', async () => {
   const o = scratch(), p = agentPaths('opencode', o), foreign = '<!-- videohub:begin -->\n/other-install/server/cli.js\n<!-- videohub:end -->';
