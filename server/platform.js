@@ -350,7 +350,14 @@ function createUnixPlatform({ osName: OS, env, home, temp, fs, os, path, spawn, 
     return { edge, chrome, chromium, path: nativeExecutable(override) ? override : edge || chrome || chromium };
   }
   const browser = findBrowser();
-  const TOOLS = { ffmpeg: findTool('ffmpeg') || 'ffmpeg', ffprobe: findTool('ffprobe') || 'ffprobe', node: nodePath, ...browser };
+  // Homebrew's real Node path is versioned (Cellar/node/<version>) and is removed by `brew upgrade`. Launchers and the
+  // login service must keep working afterwards, so prefer the stable Homebrew link that currently resolves to it.
+  function stableNode(file) {
+    if (!IS_MAC || !/\/Cellar\//.test(String(file))) return file;
+    for (const dir of ['/opt/homebrew/bin', '/usr/local/bin']) { const link = path.join(dir, 'node'); try { if (fs.realpathSync(link) === fs.realpathSync(file)) return link; } catch { } }
+    return file;
+  }
+  const TOOLS = { ffmpeg: findTool('ffmpeg') || 'ffmpeg', ffprobe: findTool('ffprobe') || 'ffprobe', node: stableNode(nodePath), ...browser };
   function launch(file, args) {
     if (env.VIDEOHUB_NO_WINDOW) return Promise.resolve();
     return new Promise((resolve, reject) => { try { const c = spawn(file, args, { detached: true, stdio: 'ignore' }); c.once('error', reject); c.once('spawn', () => { c.unref(); resolve(); }); } catch (e) { reject(e); } });
@@ -395,7 +402,8 @@ function createUnixPlatform({ osName: OS, env, home, temp, fs, os, path, spawn, 
     if (target === path.parse(target).root || target === home) throw new Error('Refusing to trash a filesystem root or home folder.');
     if (IS_MAC) {
       // Passing data as argv avoids AppleScript quoting and command-injection hazards for unusual filenames.
-      const script = 'on run argv\ntell application "Finder" to delete (POSIX file (item 1 of argv))\nend run';
+      // The file reference is built outside the Finder tell: inside it, "POSIX file" with a runtime value is resolved by Finder and can fail.
+      const script = 'on run argv\nset target to POSIX file (item 1 of argv)\ntell application "Finder" to delete target\nend run';
       const r = await run('osascript', ['-e', script, '--', target]);
       if (r.code !== 0) throw new Error('Could not move to Trash. Allow Finder Automation permission and try again. ' + (r.stderr || '').trim().slice(0, 200));
       return;

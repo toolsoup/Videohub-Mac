@@ -145,3 +145,14 @@ test('macOS failed startup registration stays observable and missing login owner
   await assert.rejects(h.setAutostart(true), /Could not enable login startup/); assert.equal(await h.getAutostart(), false);
   const unknown = harness({ uid: null }); await assert.rejects(unknown.setAutostart(true), /login user is unavailable/); assert.equal(unknown.files.has('/Users/me/Library/LaunchAgents/com.videohub.hub.plist'), false);
 });
+
+test('macOS keeps launchers on the stable Homebrew Node link instead of the versioned Cellar path', () => {
+  const cellar = '/opt/homebrew/Cellar/node/24.1.0/bin/node';
+  const make = (links, nodePath = cellar) => createPlatform({ osName: 'darwin', env: { PATH: '' }, home: '/Users/me', temp: '/tmp', hubDir: '/opt/VideoHub', path: path.posix, nodePath,
+    fs: { constants: { X_OK: 1 }, existsSync: () => false, statSync: () => { throw new Error('ENOENT'); }, accessSync: () => { throw new Error('ENOENT'); }, readFileSync: () => '',
+      realpathSync: f => { if (f === cellar) return f; if (links[f]) return links[f]; throw new Error('ENOENT'); } } });
+  assert.equal(make({ '/opt/homebrew/bin/node': cellar }).TOOLS.node, '/opt/homebrew/bin/node');
+  assert.equal(make({ '/opt/homebrew/bin/node': '/opt/homebrew/Cellar/node/25.0.0/bin/node' }).TOOLS.node, cellar);   // the link points elsewhere: keep the real path
+  assert.equal(make({}).TOOLS.node, cellar);
+  assert.equal(make({ '/opt/homebrew/bin/node': cellar }, '/usr/local/n/bin/node').TOOLS.node, '/usr/local/n/bin/node');
+});

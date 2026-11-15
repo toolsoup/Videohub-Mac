@@ -238,7 +238,7 @@ export async function runInstaller(options, { hub = ROOT, platform = platformDef
       if (platform.IS_WIN) {
         if (makeShortcut) { say('create or refresh the owned Desktop shortcut through the installed Node runtime'); if (!dry) try { await platform.setShortcut(true); } catch (e) { legacyLaunchersSafe = false; warn(e.message); } }
       } else {
-        const entry = platform.IS_MAC ? '#!/bin/bash\n# VideoHub install: ' + hub + '\nset -euo pipefail\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\nexec ' + shellQuote(process.execPath) + ' ' + shellQuote(path.join(hub, 'scripts', 'install.mjs')) + ' open "$@"\n' : '# VideoHub install: ' + hub + '\n' + platform.desktopEntry(false);
+        const entry = platform.IS_MAC ? '#!/bin/bash\n# VideoHub install: ' + hub + '\nset -euo pipefail\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\nexec ' + shellQuote(platform.TOOLS?.node || process.execPath) + ' ' + shellQuote(path.join(hub, 'scripts', 'install.mjs')) + ' open "$@"\n' : '# VideoHub install: ' + hub + '\n' + platform.desktopEntry(false);
         for (const f of [...(platform.IS_MAC ? [] : [entryFile]), ...(makeShortcut ? [desktopFile] : [])]) {
           if (fs.existsSync(f) && !owned(f, hub)) { warn('Shortcut belongs to another install; left unchanged: ' + f); continue; }
           say('write launcher ' + f); if (!dry) write(f, entry, 0o755);
